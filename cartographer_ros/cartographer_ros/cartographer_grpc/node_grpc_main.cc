@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "cartographer_grpc/mapping/map_builder_stub.h"
+#include "cartographer/cloud/client/map_builder_stub.h"
 #include "cartographer_ros/node.h"
 #include "cartographer_ros/node_options.h"
 #include "cartographer_ros/ros_log_sink.h"
@@ -37,9 +37,11 @@ DEFINE_bool(
 DEFINE_string(
     save_map_filename, "",
     "If non-empty, serialize state and write it to disk before shutting down.");
+DEFINE_string(load_state_filename, "",
+              "If non-empty, filename of a .pbstream file "
+              "to load, containing a saved SLAM state.");
 
 namespace cartographer_ros {
-namespace cartographer_grpc {
 namespace {
 
 void Run() {
@@ -51,9 +53,14 @@ void Run() {
   std::tie(node_options, trajectory_options) =
       LoadOptions(FLAGS_configuration_directory, FLAGS_configuration_basename);
 
-  auto map_builder = cartographer::common::make_unique<
-      ::cartographer_grpc::mapping::MapBuilderStub>(FLAGS_server_address);
+  auto map_builder =
+      cartographer::common::make_unique<::cartographer::cloud::MapBuilderStub>(
+          FLAGS_server_address);
   Node node(node_options, std::move(map_builder), &tf_buffer);
+
+  if (!FLAGS_load_state_filename.empty()) {
+    node.LoadState(FLAGS_load_state_filename, true /* load_frozen_state */);
+  }
 
   if (FLAGS_start_trajectory_with_default_topics) {
     node.StartTrajectoryWithDefaultTopics(trajectory_options);
@@ -70,7 +77,6 @@ void Run() {
 }
 
 }  // namespace
-}  // namespace cartographer_grpc
 }  // namespace cartographer_ros
 
 int main(int argc, char** argv) {
@@ -86,6 +92,6 @@ int main(int argc, char** argv) {
   ::ros::start();
 
   cartographer_ros::ScopedRosLogSink ros_log_sink;
-  cartographer_ros::cartographer_grpc::Run();
+  cartographer_ros::Run();
   ::ros::shutdown();
 }

@@ -48,32 +48,63 @@ SensorBridge::SensorBridge(
       tf_bridge_(tracking_frame, lookup_transform_timeout_sec, tf_buffer),
       trajectory_builder_(trajectory_builder) {}
 
-std::unique_ptr<::cartographer::sensor::OdometryData>
-SensorBridge::ToOdometryData(const nav_msgs::Odometry::ConstPtr& msg) {
+std::unique_ptr<carto::sensor::OdometryData> SensorBridge::ToOdometryData(
+    const nav_msgs::Odometry::ConstPtr& msg) {
   const carto::common::Time time = FromRos(msg->header.stamp);
   const auto sensor_to_tracking = tf_bridge_.LookupToTracking(
       time, CheckNoLeadingSlash(msg->child_frame_id));
   if (sensor_to_tracking == nullptr) {
     return nullptr;
   }
-  return ::cartographer::common::make_unique<
-      ::cartographer::sensor::OdometryData>(
-      ::cartographer::sensor::OdometryData{
+  return carto::common::make_unique<carto::sensor::OdometryData>(
+      carto::sensor::OdometryData{
           time, ToRigid3d(msg->pose.pose) * sensor_to_tracking->inverse()});
 }
 
 void SensorBridge::HandleOdometryMessage(
     const std::string& sensor_id, const nav_msgs::Odometry::ConstPtr& msg) {
-  std::unique_ptr<::cartographer::sensor::OdometryData> odometry_data =
+  std::unique_ptr<carto::sensor::OdometryData> odometry_data =
       ToOdometryData(msg);
   if (odometry_data != nullptr) {
     trajectory_builder_->AddSensorData(
-        sensor_id, cartographer::sensor::OdometryData{odometry_data->time,
-                                                      odometry_data->pose});
+        sensor_id,
+        carto::sensor::OdometryData{odometry_data->time, odometry_data->pose});
   }
 }
 
-std::unique_ptr<::cartographer::sensor::ImuData> SensorBridge::ToImuData(
+void SensorBridge::HandleNavSatFixMessage(
+    const std::string& sensor_id, const sensor_msgs::NavSatFix::ConstPtr& msg) {
+  const carto::common::Time time = FromRos(msg->header.stamp);
+  if (msg->status.status == sensor_msgs::NavSatStatus::STATUS_NO_FIX) {
+    trajectory_builder_->AddSensorData(
+        sensor_id, carto::sensor::FixedFramePoseData{
+                       time, carto::common::optional<Rigid3d>()});
+    return;
+  }
+
+  if (!ecef_to_local_frame_.has_value()) {
+    ecef_to_local_frame_ =
+        ComputeLocalFrameFromLatLong(msg->latitude, msg->longitude);
+    LOG(INFO) << "Using NavSatFix. Setting ecef_to_local_frame with lat = "
+              << msg->latitude << ", long = " << msg->longitude << ".";
+  }
+
+  trajectory_builder_->AddSensorData(
+      sensor_id,
+      carto::sensor::FixedFramePoseData{
+          time, carto::common::optional<Rigid3d>(Rigid3d::Translation(
+                    ecef_to_local_frame_.value() *
+                    LatLongAltToEcef(msg->latitude, msg->longitude,
+                                     msg->altitude)))});
+}
+
+void SensorBridge::HandleLandmarkMessage(
+    const std::string& sensor_id,
+    const cartographer_ros_msgs::LandmarkList::ConstPtr& msg) {
+  trajectory_builder_->AddSensorData(sensor_id, ToLandmarkData(*msg));
+}
+
+std::unique_ptr<carto::sensor::ImuData> SensorBridge::ToImuData(
     const sensor_msgs::Imu::ConstPtr& msg) {
   CHECK_NE(msg->linear_acceleration_covariance[0], -1)
       << "Your IMU data claims to not contain linear acceleration measurements "
@@ -96,8 +127,8 @@ std::unique_ptr<::cartographer::sensor::ImuData> SensorBridge::ToImuData(
       << "The IMU frame must be colocated with the tracking frame. "
          "Transforming linear acceleration into the tracking frame will "
          "otherwise be imprecise.";
-  return ::cartographer::common::make_unique<::cartographer::sensor::ImuData>(
-      ::cartographer::sensor::ImuData{
+  return carto::common::make_unique<carto::sensor::ImuData>(
+      carto::sensor::ImuData{
           time,
           sensor_to_tracking->rotation() * ToEigen(msg->linear_acceleration),
           sensor_to_tracking->rotation() * ToEigen(msg->angular_velocity)});
@@ -105,19 +136,19 @@ std::unique_ptr<::cartographer::sensor::ImuData> SensorBridge::ToImuData(
 
 void SensorBridge::HandleImuMessage(const std::string& sensor_id,
                                     const sensor_msgs::Imu::ConstPtr& msg) {
-  std::unique_ptr<::cartographer::sensor::ImuData> imu_data = ToImuData(msg);
+  std::unique_ptr<carto::sensor::ImuData> imu_data = ToImuData(msg);
   if (imu_data != nullptr) {
     trajectory_builder_->AddSensorData(
-        sensor_id, cartographer::sensor::ImuData{imu_data->time,
-                                                 imu_data->linear_acceleration,
-                                                 imu_data->angular_velocity});
+        sensor_id,
+        carto::sensor::ImuData{imu_data->time, imu_data->linear_acceleration,
+                               imu_data->angular_velocity});
   }
 }
 
 void SensorBridge::HandleLaserScanMessage(
     const std::string& sensor_id, const sensor_msgs::LaserScan::ConstPtr& msg) {
-  ::cartographer::sensor::PointCloudWithIntensities point_cloud;
-  ::cartographer::common::Time time;
+  carto::sensor::PointCloudWithIntensities point_cloud;
+  carto::common::Time time;
   std::tie(point_cloud, time) = ToPointCloudWithIntensities(*msg);
   HandleLaserScan(sensor_id, time, msg->header.frame_id, point_cloud);
 }
@@ -125,8 +156,8 @@ void SensorBridge::HandleLaserScanMessage(
 void SensorBridge::HandleMultiEchoLaserScanMessage(
     const std::string& sensor_id,
     const sensor_msgs::MultiEchoLaserScan::ConstPtr& msg) {
-  ::cartographer::sensor::PointCloudWithIntensities point_cloud;
-  ::cartographer::common::Time time;
+  carto::sensor::PointCloudWithIntensities point_cloud;
+  carto::common::Time time;
   std::tie(point_cloud, time) = ToPointCloudWithIntensities(*msg);
   HandleLaserScan(sensor_id, time, msg->header.frame_id, point_cloud);
 }
@@ -150,6 +181,9 @@ void SensorBridge::HandleLaserScan(
     const std::string& sensor_id, const carto::common::Time time,
     const std::string& frame_id,
     const carto::sensor::PointCloudWithIntensities& points) {
+  if (points.points.empty()) {
+    return;
+  }
   CHECK_LE(points.points.back()[3], 0);
   // TODO(gaschler): Use per-point time instead of subdivisions.
   for (int i = 0; i != num_subdivisions_per_laser_scan_; ++i) {
@@ -167,7 +201,17 @@ void SensorBridge::HandleLaserScan(
     // send all other sensor data first.
     const carto::common::Time subdivision_time =
         time + carto::common::FromSeconds(time_to_subdivision_end);
-    for (auto& point : subdivision) {
+    auto it = sensor_to_previous_subdivision_time_.find(sensor_id);
+    if (it != sensor_to_previous_subdivision_time_.end() &&
+        it->second >= subdivision_time) {
+      LOG(WARNING) << "Ignored subdivision of a LaserScan message from sensor "
+                   << sensor_id << " because previous subdivision time "
+                   << it->second << " is not before current subdivision time "
+                   << subdivision_time;
+      continue;
+    }
+    sensor_to_previous_subdivision_time_[sensor_id] = subdivision_time;
+    for (Eigen::Vector4f& point : subdivision) {
       point[3] -= time_to_subdivision_end;
     }
     CHECK_EQ(subdivision.back()[3], 0);
@@ -182,7 +226,7 @@ void SensorBridge::HandleRangefinder(
       tf_bridge_.LookupToTracking(time, CheckNoLeadingSlash(frame_id));
   if (sensor_to_tracking != nullptr) {
     trajectory_builder_->AddSensorData(
-        sensor_id, cartographer::sensor::TimedPointCloudData{
+        sensor_id, carto::sensor::TimedPointCloudData{
                        time, sensor_to_tracking->translation().cast<float>(),
                        carto::sensor::TransformTimedPointCloud(
                            ranges, sensor_to_tracking->cast<float>())});
