@@ -22,8 +22,8 @@
 #include "cartographer/mapping/proto/pose_graph.pb.h"
 #include "cartographer/mapping/proto/trajectory_builder_options.pb.h"
 
-#ifndef CARTOGRAPHER_ROS_ASSETS_WRITER_H_
-#define CARTOGRAPHER_ROS_ASSETS_WRITER_H_
+#ifndef CARTOGRAPHER_ROS_CARTOGRAPHER_ROS_ASSETS_WRITER_H
+#define CARTOGRAPHER_ROS_CARTOGRAPHER_ROS_ASSETS_WRITER_H
 
 namespace cartographer_ros {
 
@@ -33,11 +33,22 @@ class AssetsWriter {
                const std::vector<std::string>& bag_filenames,
                const std::string& output_file_prefix);
 
+  // Registers a new PointsProcessor type uniquly identified by 'name' which
+  // will be created using 'factory'.
+  void RegisterPointsProcessor(
+      const std::string& name,
+      cartographer::io::PointsProcessorPipelineBuilder::FactoryFunction
+          factory);
+
   // Configures a points processing pipeline and pushes the points from the
   // bag through the pipeline.
   void Run(const std::string& configuration_directory,
            const std::string& configuration_basename,
            const std::string& urdf_filename, bool use_bag_transforms);
+
+  // Creates a FileWriterFactory which creates a FileWriter for storing assets.
+  static ::cartographer::io::FileWriterFactory CreateFileWriterFactory(
+      const std::string& file_path);
 
  private:
   std::vector<std::string> bag_filenames_;
@@ -49,4 +60,4 @@ class AssetsWriter {
 
 }  // namespace cartographer_ros
 
-#endif  // CARTOGRAPHER_ROS_ASSETS_WRITER_H_
+#endif  // CARTOGRAPHER_ROS_CARTOGRAPHER_ROS_ASSETS_WRITER_H
