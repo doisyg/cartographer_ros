@@ -14,13 +14,17 @@
  * limitations under the License.
  */
 
-#include "cartographer_grpc/mapping/map_builder_stub.h"
+#include "cartographer/cloud/client/map_builder_stub.h"
+#include "cartographer/common/make_unique.h"
 #include "cartographer_ros/node.h"
 #include "cartographer_ros/node_options.h"
 #include "cartographer_ros/ros_log_sink.h"
 #include "gflags/gflags.h"
 #include "tf2_ros/transform_listener.h"
 
+DEFINE_bool(collect_metrics, false,
+            "Activates the collection of runtime metrics. If activated, the "
+            "metrics can be accessed via a ROS service.");
 DEFINE_string(configuration_directory, "",
               "First directory in which configuration files are searched, "
               "second is always the Cartographer installation to allow "
@@ -37,13 +41,17 @@ DEFINE_bool(
 DEFINE_string(
     save_map_filename, "",
     "If non-empty, serialize state and write it to disk before shutting down.");
+DEFINE_string(load_state_filename, "",
+              "If non-empty, filename of a .pbstream file "
+              "to load, containing a saved SLAM state.");
+DEFINE_string(client_id, "",
+              "Cartographer client ID to use when connecting to the server.");
 
 namespace cartographer_ros {
-namespace cartographer_grpc {
 namespace {
 
 void Run() {
-  constexpr double kTfBufferCacheTimeInSeconds = 1e6;
+  constexpr double kTfBufferCacheTimeInSeconds = 10.;
   tf2_ros::Buffer tf_buffer{::ros::Duration(kTfBufferCacheTimeInSeconds)};
   tf2_ros::TransformListener tf(tf_buffer);
   NodeOptions node_options;
@@ -51,9 +59,15 @@ void Run() {
   std::tie(node_options, trajectory_options) =
       LoadOptions(FLAGS_configuration_directory, FLAGS_configuration_basename);
 
-  auto map_builder = cartographer::common::make_unique<
-      ::cartographer_grpc::mapping::MapBuilderStub>(FLAGS_server_address);
-  Node node(node_options, std::move(map_builder), &tf_buffer);
+  auto map_builder =
+      cartographer::common::make_unique<::cartographer::cloud::MapBuilderStub>(
+          FLAGS_server_address, FLAGS_client_id);
+  Node node(node_options, std::move(map_builder), &tf_buffer,
+            FLAGS_collect_metrics);
+
+  if (!FLAGS_load_state_filename.empty()) {
+    node.LoadState(FLAGS_load_state_filename, true /* load_frozen_state */);
+  }
 
   if (FLAGS_start_trajectory_with_default_topics) {
     node.StartTrajectoryWithDefaultTopics(trajectory_options);
@@ -70,7 +84,6 @@ void Run() {
 }
 
 }  // namespace
-}  // namespace cartographer_grpc
 }  // namespace cartographer_ros
 
 int main(int argc, char** argv) {
@@ -81,11 +94,12 @@ int main(int argc, char** argv) {
       << "-configuration_directory is missing.";
   CHECK(!FLAGS_configuration_basename.empty())
       << "-configuration_basename is missing.";
+  CHECK(!FLAGS_client_id.empty()) << "-client_id is missing.";
 
   ::ros::init(argc, argv, "cartographer_grpc_node");
   ::ros::start();
 
   cartographer_ros::ScopedRosLogSink ros_log_sink;
-  cartographer_ros::cartographer_grpc::Run();
+  cartographer_ros::Run();
   ::ros::shutdown();
 }

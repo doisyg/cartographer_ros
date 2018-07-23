@@ -18,14 +18,15 @@
 #include <string>
 
 #include "cartographer/io/proto_stream.h"
+#include "cartographer/io/proto_stream_deserializer.h"
 #include "cartographer/io/submap_painter.h"
+#include "cartographer/mapping/2d/probability_grid.h"
+#include "cartographer/mapping/2d/submap_2d.h"
+#include "cartographer/mapping/3d/submap_3d.h"
 #include "cartographer/mapping/proto/pose_graph.pb.h"
 #include "cartographer/mapping/proto/serialization.pb.h"
 #include "cartographer/mapping/proto/submap.pb.h"
-#include "cartographer/mapping/submaps.h"
-#include "cartographer/mapping_2d/probability_grid.h"
-#include "cartographer/mapping_2d/submaps.h"
-#include "cartographer/mapping_3d/submaps.h"
+#include "cartographer/mapping/proto/trajectory_builder_options.pb.h"
 #include "cartographer_ros/ros_map.h"
 #include "cartographer_ros/submap.h"
 #include "gflags/gflags.h"
@@ -42,19 +43,18 @@ namespace {
 void Run(const std::string& pbstream_filename, const std::string& map_filestem,
          const double resolution) {
   ::cartographer::io::ProtoStreamReader reader(pbstream_filename);
+  ::cartographer::io::ProtoStreamDeserializer deserializer(&reader);
 
-  ::cartographer::mapping::proto::PoseGraph pose_graph;
-  CHECK(reader.ReadProto(&pose_graph));
+  const auto& pose_graph = deserializer.pose_graph();
 
   LOG(INFO) << "Loading submap slices from serialized data.";
   std::map<::cartographer::mapping::SubmapId, ::cartographer::io::SubmapSlice>
       submap_slices;
-  for (;;) {
-    ::cartographer::mapping::proto::SerializedData proto;
-    if (!reader.ReadProto(&proto)) {
-      break;
-    }
-    if (proto.has_submap()) {
+  ::cartographer::mapping::proto::SerializedData proto;
+  ::cartographer::mapping::ValueConversionTables conversion_lookup_tables;
+  while (deserializer.ReadNextSerializedData(&proto)) {
+    if (proto.has_submap() &&
+        (Has2DGrid(proto.submap()) || Has3DGrids(proto.submap()))) {
       const auto& submap = proto.submap();
       const ::cartographer::mapping::SubmapId id{
           submap.submap_id().trajectory_id(),
@@ -64,7 +64,8 @@ void Run(const std::string& pbstream_filename, const std::string& map_filestem,
               pose_graph.trajectory(id.trajectory_id)
                   .submap(id.submap_index)
                   .pose());
-      FillSubmapSlice(global_submap_pose, submap, &submap_slices[id]);
+      FillSubmapSlice(global_submap_pose, submap, &submap_slices[id],
+                      &conversion_lookup_tables);
     }
   }
   CHECK(reader.eof());

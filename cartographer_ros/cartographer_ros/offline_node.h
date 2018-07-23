@@ -14,9 +14,11 @@
  * limitations under the License.
  */
 
-#ifndef CARTOGRAPHER_ROS_OFFLINE_NODE_H_
-#define CARTOGRAPHER_ROS_OFFLINE_NODE_H_
+#ifndef CARTOGRAPHER_ROS_CARTOGRAPHER_ROS_OFFLINE_NODE_H
+#define CARTOGRAPHER_ROS_CARTOGRAPHER_ROS_OFFLINE_NODE_H
 
+#include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -25,12 +27,12 @@
 
 namespace cartographer_ros {
 
-void RunOfflineNode(
-    std::unique_ptr<cartographer::mapping::MapBuilderInterface> map_builder,
-    const cartographer_ros::NodeOptions& node_options,
-    const cartographer_ros::TrajectoryOptions& trajectory_options,
-    const std::vector<std::string>& bag_filenames);
+using MapBuilderFactory =
+    std::function<std::unique_ptr<::cartographer::mapping::MapBuilderInterface>(
+        const ::cartographer::mapping::proto::MapBuilderOptions&)>;
+
+void RunOfflineNode(const MapBuilderFactory& map_builder_factory);
 
 }  // namespace cartographer_ros
 
-#endif  // CARTOGRAPHER_ROS_OFFLINE_NODE_H_
+#endif  // CARTOGRAPHER_ROS_CARTOGRAPHER_ROS_OFFLINE_NODE_H
